@@ -1,0 +1,84 @@
+name: FirmwareOps HIL Flash
+description: Flash an ESP32-S3 on a connected Linux self-hosted runner and optionally capture UART output.
+inputs:
+  port:
+    description: Serial device path on the self-hosted runner, such as /dev/ttyACM0.
+    required: true
+  bootloader:
+    description: Path to the ESP-IDF bootloader binary.
+    required: true
+  partition-table:
+    description: Path to the ESP-IDF partition table binary.
+    required: true
+  firmware:
+    description: Path to the ESP-IDF application binary.
+    required: true
+  baud:
+    description: esptool baud rate.
+    required: false
+    default: "460800"
+  capture-seconds:
+    description: Seconds of UART output to capture after flashing; set to 0 to disable.
+    required: false
+    default: "10"
+  uart-baud:
+    description: UART baud rate for output capture.
+    required: false
+    default: "115200"
+  uart-log:
+    description: Path to save the UART capture file.
+    required: false
+    default: uart.log
+outputs:
+  uart-log:
+    description: Absolute path to the UART log, when capture is enabled.
+    value: ${{ steps.run.outputs.uart_log }}
+  flash-result:
+    description: Flash command result.
+    value: ${{ steps.run.outputs.flash_result }}
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-go@v5
+      with:
+        go-version: "1.22.x"
+    - id: run
+      shell: bash
+      env:
+        HIL_PORT: ${{ inputs.port }}
+        HIL_BOOTLOADER: ${{ inputs.bootloader }}
+        HIL_PARTITION_TABLE: ${{ inputs.partition-table }}
+        HIL_FIRMWARE: ${{ inputs.firmware }}
+        HIL_BAUD: ${{ inputs.baud }}
+        HIL_CAPTURE_SECONDS: ${{ inputs.capture-seconds }}
+        HIL_UART_BAUD: ${{ inputs.uart-baud }}
+        HIL_UART_LOG: ${{ inputs.uart-log }}
+      run: |
+        set -euo pipefail
+        runner="$RUNNER_TEMP/firmwareops-hil-runner"
+        cd "$GITHUB_ACTION_PATH/.."
+        go build -o "$runner" ./cmd/hil-runner
+        resolve_path() {
+          case "$1" in
+            /*) printf '%s' "$1" ;;
+            *) printf '%s/%s' "$GITHUB_WORKSPACE" "$1" ;;
+          esac
+        }
+        "$runner" flash \
+          --family esp32s3 \
+          --port "$HIL_PORT" \
+          --bootloader "$(resolve_path "$HIL_BOOTLOADER")" \
+          --partition-table "$(resolve_path "$HIL_PARTITION_TABLE")" \
+          --firmware "$(resolve_path "$HIL_FIRMWARE")" \
+          --baud "$HIL_BAUD" \
+          --confirm-write
+        echo "flash_result=success" >> "$GITHUB_OUTPUT"
+        cd "$GITHUB_WORKSPACE"
+        if [[ "$HIL_CAPTURE_SECONDS" != "0" ]]; then
+          "$runner" uart \
+            --port "$HIL_PORT" \
+            --baud "$HIL_UART_BAUD" \
+            --duration "${HIL_CAPTURE_SECONDS}s" \
+            --output "$HIL_UART_LOG"
+          echo "uart_log=$(resolve_path "$HIL_UART_LOG")" >> "$GITHUB_OUTPUT"
+        fi

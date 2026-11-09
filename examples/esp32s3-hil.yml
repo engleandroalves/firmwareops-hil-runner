@@ -1,0 +1,50 @@
+name: ESP32-S3 hardware-in-the-loop
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build ESP-IDF firmware
+        run: |
+          docker run --rm \
+            -v "$GITHUB_WORKSPACE:/project" \
+            -w /project \
+            espressif/idf:release-v5.3 \
+            bash -lc 'idf.py set-target esp32s3 && idf.py build'
+      - uses: actions/upload-artifact@v4
+        with:
+          name: esp32s3-firmware
+          path: |
+            build/bootloader/bootloader.bin
+            build/partition_table/partition-table.bin
+            build/firmwareops_telemetry_gateway.bin
+
+  hardware-test:
+    needs: build
+    # Configure these labels on a trusted Linux self-hosted runner with the board attached.
+    runs-on: [self-hosted, linux, x64, hil, esp32s3]
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: esp32s3-firmware
+          path: firmware
+      - uses: engleandroalves/firmwareops-hil-runner/action@main
+        id: hil
+        with:
+          port: /dev/ttyACM0
+          bootloader: firmware/bootloader/bootloader.bin
+          partition-table: firmware/partition_table/partition-table.bin
+          firmware: firmware/firmwareops_telemetry_gateway.bin
+          capture-seconds: "15"
+      - uses: actions/upload-artifact@v4
+        if: always() && steps.hil.outputs.uart-log != ''
+        with:
+          name: esp32s3-uart-log
+          path: ${{ steps.hil.outputs.uart-log }}
